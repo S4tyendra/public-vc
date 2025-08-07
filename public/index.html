@@ -1,53 +1,382 @@
-<!-- public/index.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebRTC Voice Rooms</title>
+    <title>LanCall - WebRTC Voice Rooms</title>
     <style>
-        body { font-family: sans-serif; background: #2c2c2c; color: #f0f0f0; margin: 0; padding: 20px; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #f0f0f0; 
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        .container { display: flex; height: 100vh; }
+        
+        .sidebar { 
+            width: 300px; 
+            background: rgba(0,0,0,0.8); 
+            padding: 20px; 
+            overflow-y: auto;
+            border-right: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .main-content { 
+            flex: 1; 
+            background: rgba(0,0,0,0.6); 
+            display: flex; 
+            flex-direction: column;
+        }
+        
         .view { display: none; }
         .view.active { display: block; }
-        h1, h2 { color: #4CAF50; }
-        button, input { padding: 10px; margin: 5px; border-radius: 5px; border: 1px solid #555; background: #444; color: #f0f0f0; }
-        button:hover { background: #555; }
-        #room-list { list-style-type: none; padding: 0; }
-        #room-list li { background: #3c3c3c; margin: 5px 0; padding: 10px; display: flex; justify-content: space-between; align-items: center; }
-        #audio-container { display: flex; flex-wrap: wrap; gap: 15px; margin-top: 20px; }
-        .audio-card { background: #3a3a3a; padding: 10px; border-radius: 8px; border: 1px solid #555; text-align: center; }
-        .audio-card p { margin: 0 0 5px 0; }
+        
+        h1, h2, h3 { color: #fff; margin-bottom: 15px; }
+        h1 { font-size: 24px; text-align: center; }
+        h2 { font-size: 20px; }
+        h3 { font-size: 16px; }
+        
+        input, button, select { 
+            padding: 12px; 
+            margin: 8px 0; 
+            border-radius: 8px; 
+            border: 1px solid rgba(255,255,255,0.2); 
+            background: rgba(255,255,255,0.1); 
+            color: #f0f0f0; 
+            font-size: 14px;
+            width: 100%;
+        }
+        
+        button { 
+            cursor: pointer; 
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+        button:hover { 
+            background: rgba(255,255,255,0.2); 
+            transform: translateY(-1px);
+        }
+        button.primary { 
+            background: #4CAF50; 
+            border: none; 
+        }
+        button.primary:hover { 
+            background: #45a049; 
+        }
+        button.danger { 
+            background: #f44336; 
+            border: none; 
+        }
+        button.danger:hover { 
+            background: #da190b; 
+        }
+        
+        .room-list { 
+            list-style: none; 
+            padding: 0; 
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .room-item { 
+            background: rgba(255,255,255,0.1); 
+            margin: 8px 0; 
+            padding: 15px; 
+            border-radius: 8px; 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center;
+            transition: background 0.3s ease;
+        }
+        .room-item:hover { 
+            background: rgba(255,255,255,0.15); 
+        }
+        .room-info h4 { margin: 0; color: #fff; }
+        .room-info p { margin: 0; color: #ccc; font-size: 12px; }
+        .room-actions button { 
+            width: auto; 
+            margin: 0 0 0 10px; 
+            padding: 8px 16px; 
+        }
+        
+        .form-group { margin: 15px 0; }
+        .form-group label { 
+            display: block; 
+            margin-bottom: 5px; 
+            font-weight: 500; 
+        }
+        .checkbox-group { 
+            display: flex; 
+            align-items: center; 
+            margin: 10px 0; 
+        }
+        .checkbox-group input[type="checkbox"] { 
+            width: auto; 
+            margin-right: 10px; 
+        }
+        
+        /* Room View Styles */
+        .room-header { 
+            padding: 20px; 
+            background: rgba(0,0,0,0.8); 
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .room-title { margin: 0; }
+        .room-controls { display: flex; gap: 10px; }
+        .room-controls button { width: auto; margin: 0; }
+        
+        .room-body { 
+            flex: 1; 
+            display: flex; 
+        }
+        
+        .participants { 
+            width: 250px; 
+            background: rgba(0,0,0,0.6); 
+            padding: 20px; 
+            border-right: 1px solid rgba(255,255,255,0.1);
+            overflow-y: auto;
+        }
+        
+        .audio-container { 
+            flex: 1; 
+            padding: 20px; 
+            display: flex; 
+            flex-wrap: wrap; 
+            gap: 20px; 
+            align-content: flex-start;
+            overflow-y: auto;
+        }
+        
+        .audio-card { 
+            background: rgba(255,255,255,0.1); 
+            padding: 20px; 
+            border-radius: 12px; 
+            border: 2px solid transparent;
+            text-align: center; 
+            min-width: 200px;
+            transition: all 0.3s ease;
+        }
+        .audio-card.speaking { 
+            border-color: #4CAF50; 
+            box-shadow: 0 0 20px rgba(76, 175, 80, 0.3);
+        }
+        .audio-card.muted { 
+            opacity: 0.6; 
+            border-color: #f44336; 
+        }
+        .audio-card.admin { 
+            border-color: #FFD700; 
+        }
+        
+        .participant { 
+            background: rgba(255,255,255,0.1); 
+            padding: 10px; 
+            margin: 5px 0; 
+            border-radius: 8px; 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center;
+        }
+        .participant.admin { background: rgba(255, 215, 0, 0.2); }
+        .participant.muted { opacity: 0.6; }
+        
+        .participant-info { flex: 1; }
+        .participant-name { font-weight: 500; }
+        .participant-status { font-size: 12px; color: #ccc; }
+        
+        .participant-controls { display: flex; gap: 5px; }
+        .participant-controls button { 
+            width: auto; 
+            margin: 0; 
+            padding: 5px 10px; 
+            font-size: 12px; 
+        }
+        
+        .chat-container { 
+            width: 250px; 
+            background: rgba(0,0,0,0.6); 
+            display: flex; 
+            flex-direction: column;
+            border-left: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .chat-header { 
+            padding: 15px; 
+            border-bottom: 1px solid rgba(255,255,255,0.1); 
+        }
+        .chat-header h3 { margin: 0; }
+        
+        .chat-messages { 
+            flex: 1; 
+            padding: 15px; 
+            overflow-y: auto; 
+        }
+        
+        .chat-message { 
+            margin: 10px 0; 
+            padding: 8px; 
+            background: rgba(255,255,255,0.1); 
+            border-radius: 8px; 
+        }
+        .chat-message.own { 
+            background: rgba(76, 175, 80, 0.3); 
+            margin-left: 20px; 
+        }
+        .chat-sender { 
+            font-weight: 500; 
+            font-size: 12px; 
+            color: #4CAF50; 
+        }
+        .chat-text { 
+            margin: 5px 0; 
+        }
+        .chat-time { 
+            font-size: 10px; 
+            color: #999; 
+        }
+        
+        .chat-input { 
+            padding: 15px; 
+            border-top: 1px solid rgba(255,255,255,0.1); 
+            display: flex; 
+            gap: 10px; 
+        }
+        .chat-input input { 
+            flex: 1; 
+            margin: 0; 
+        }
+        .chat-input button { 
+            width: auto; 
+            margin: 0; 
+        }
+        
+        .status { 
+            text-align: center; 
+            padding: 10px; 
+            background: rgba(0,0,0,0.8); 
+            color: #4CAF50; 
+        }
+        
+        .private-rooms { margin-top: 20px; }
+        .private-rooms h3 { color: #FFD700; }
+        
+        .join-private { margin-top: 20px; }
+        .join-private input { margin-bottom: 10px; }
+        
+        @media (max-width: 768px) {
+            .container { flex-direction: column; }
+            .sidebar { width: 100%; height: auto; max-height: 40vh; }
+            .chat-container { width: 100%; height: 200px; }
+            .participants { width: 100%; height: auto; max-height: 150px; }
+        }
     </style>
 </head>
 <body>
-    <h1>WebRTC Voice Rooms</h1>
-
     <!-- Login View -->
     <div id="login-view" class="view active">
-        <h2>Enter Your Name</h2>
-        <input type="text" id="name-input" placeholder="Your Name">
-        <button id="login-button">Enter</button>
+        <div class="container" style="justify-content: center; align-items: center;">
+            <div style="background: rgba(0,0,0,0.8); padding: 40px; border-radius: 15px; max-width: 400px; width: 90%;">
+                <h1>Welcome to LanCall</h1>
+                <div class="form-group">
+                    <label for="name-input">Enter Your Name</label>
+                    <input type="text" id="name-input" placeholder="Your Name" maxlength="50">
+                </div>
+                <button id="login-button" class="primary">Enter</button>
+            </div>
+        </div>
     </div>
 
     <!-- Lobby View -->
     <div id="lobby-view" class="view">
-        <h2 id="welcome-message"></h2>
-        <h3>Public Rooms</h3>
-        <ul id="room-list"></ul>
-        <button id="refresh-rooms-button">Refresh List</button>
-        <hr>
-        <h3>Create a New Room</h3>
-        <input type="text" id="room-name-input" placeholder="Room Name">
-        <label><input type="checkbox" id="is-public-checkbox" checked> Public</label>
-        <button id="create-room-button">Create Room</button>
+        <div class="container">
+            <div class="sidebar">
+                <h1>LanCall</h1>
+                <div id="welcome-message" style="margin-bottom: 20px; color: #4CAF50;"></div>
+                
+                <h3>Public Rooms</h3>
+                <ul id="room-list" class="room-list"></ul>
+                <button id="refresh-rooms-button">🔄 Refresh List</button>
+                
+                <div class="private-rooms">
+                    <h3>My Private Rooms</h3>
+                    <ul id="private-room-list" class="room-list"></ul>
+                </div>
+                
+                <div class="join-private">
+                    <h3>Join Private Room</h3>
+                    <input type="text" id="private-room-id" placeholder="Room ID">
+                    <button id="join-private-button">Join</button>
+                </div>
+                
+                <hr style="margin: 20px 0; border: 1px solid rgba(255,255,255,0.1);">
+                
+                <h3>Create New Room</h3>
+                <div class="form-group">
+                    <label for="room-name-input">Room Name</label>
+                    <input type="text" id="room-name-input" placeholder="Room Name" maxlength="100">
+                </div>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="is-public-checkbox" checked>
+                    <label for="is-public-checkbox">Public Room</label>
+                </div>
+                <button id="create-room-button" class="primary">Create Room</button>
+            </div>
+            
+            <div class="main-content">
+                <div style="padding: 40px; text-align: center;">
+                    <h2>Select a room to join or create a new one</h2>
+                    <p style="color: #ccc; margin-top: 20px;">
+                        Public rooms are visible to everyone. Private rooms can only be joined with a room ID.
+                    </p>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Room View -->
     <div id="room-view" class="view">
-        <h2 id="room-title"></h2>
-        <p id="status">Connecting...</p>
-        <button id="leave-room-button">Leave Room</button>
-        <div id="audio-container"></div>
+        <div class="container">
+            <div class="main-content">
+                <div class="room-header">
+                    <div>
+                        <h2 id="room-title" class="room-title"></h2>
+                        <p id="room-status" class="status"></p>
+                    </div>
+                    <div class="room-controls">
+                        <button id="mute-self-button">🔇 Mute</button>
+                        <button id="leave-room-button" class="danger">Leave Room</button>
+                    </div>
+                </div>
+                
+                <div class="room-body">
+                    <div class="participants">
+                        <h3>Participants (<span id="participant-count">0</span>)</h3>
+                        <div id="participant-list"></div>
+                    </div>
+                    
+                    <div class="audio-container" id="audio-container">
+                        <!-- Audio cards will be added here -->
+                    </div>
+                    
+                    <div class="chat-container">
+                        <div class="chat-header">
+                            <h3>Chat</h3>
+                        </div>
+                        <div class="chat-messages" id="chat-messages"></div>
+                        <div class="chat-input">
+                            <input type="text" id="chat-input" placeholder="Type a message..." maxlength="500">
+                            <button id="send-chat-button">Send</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script src="/script.js"></script>

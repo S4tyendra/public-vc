@@ -55,6 +55,7 @@ func (s *Store) CreateRoom(name string, isPublic bool, creatorID primitive.Objec
 		Name:      name,
 		IsPublic:  isPublic,
 		CreatorID: creatorID,
+		CreatedAt: time.Now(),
 	}
 	_, err := s.db.Collection("rooms").InsertOne(context.TODO(), room)
 	if err != nil {
@@ -65,7 +66,7 @@ func (s *Store) CreateRoom(name string, isPublic bool, creatorID primitive.Objec
 
 func (s *Store) GetPublicRooms() ([]models.Room, error) {
 	var rooms []models.Room
-	cursor, err := s.db.Collection("rooms").Find(context.TODO(), bson.M{"ispublic": true})
+	cursor, err := s.db.Collection("rooms").Find(context.TODO(), bson.M{"isPublic": true})
 	if err != nil {
 		return nil, err
 	}
@@ -75,4 +76,18 @@ func (s *Store) GetPublicRooms() ([]models.Room, error) {
 		return nil, err
 	}
 	return rooms, nil
+}
+
+func (s *Store) GetRoom(id primitive.ObjectID) (*models.Room, error) {
+	var room models.Room
+	err := s.db.Collection("rooms").FindOne(context.TODO(), bson.M{"_id": id}).Decode(&room)
+	return &room, err
+}
+
+func (s *Store) GetRoomByIdString(idStr string) (*models.Room, error) {
+	id, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetRoom(id)
 }

@@ -4,6 +4,7 @@ package main
 import (
 	"encoding/json"
 	"log"
+	"time"
 
 	"vc/db"
 	"vc/hub"
@@ -47,6 +48,21 @@ func main() {
 		return c.JSON(user)
 	})
 
+	// Get user by ID
+	api.Get("/user/:id", func(c *fiber.Ctx) error {
+		idStr := c.Params("id")
+		id, err := primitive.ObjectIDFromHex(idStr)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid user id"})
+		}
+
+		user, err := store.GetUser(id)
+		if err != nil {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "user not found"})
+		}
+		return c.JSON(user)
+	})
+
 	// Create a new room
 	api.Post("/room", func(c *fiber.Ctx) error {
 		var body struct {
@@ -69,13 +85,128 @@ func main() {
 		return c.JSON(room)
 	})
 
-	// Get all public rooms
+	// Get all public rooms with member counts
 	api.Get("/rooms", func(c *fiber.Ctx) error {
 		rooms, err := store.GetPublicRooms()
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "could not get rooms"})
 		}
+
+		// Add member counts from hub
+		for i := range rooms {
+			if room := hubInstance.GetRoom(rooms[i].ID.Hex()); room != nil {
+				rooms[i].MemberCount = room.GetMemberCount()
+			}
+		}
+
 		return c.JSON(rooms)
+	})
+
+	// Get room by ID
+	api.Get("/room/:id", func(c *fiber.Ctx) error {
+		roomID := c.Params("id")
+
+		room, err := store.GetRoomByIdString(roomID)
+		if err != nil {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "room not found"})
+		}
+
+		// Add member count from hub
+		if hubRoom := hubInstance.GetRoom(roomID); hubRoom != nil {
+			room.MemberCount = hubRoom.GetMemberCount()
+		}
+
+		return c.JSON(room)
+	})
+
+	// Get room members
+	api.Get("/room/:id/members", func(c *fiber.Ctx) error {
+		roomID := c.Params("id")
+
+		room := hubInstance.GetRoom(roomID)
+		if room == nil {
+			return c.JSON([]interface{}{}) // Return empty array if room not active
+		}
+
+		members := room.GetMembers()
+		return c.JSON(members)
+	})
+
+	// Admin actions - mute user
+	api.Post("/room/:id/mute", func(c *fiber.Ctx) error {
+		roomID := c.Params("id")
+		var body struct {
+			AdminUserID  string `json:"adminUserId"`
+			TargetUserID string `json:"targetUserId"`
+		}
+		if err := c.BodyParser(&body); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "cannot parse json"})
+		}
+
+		room := hubInstance.GetRoom(roomID)
+		if room == nil {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "room not found"})
+		}
+
+		success := room.MuteUser(body.AdminUserID, body.TargetUserID)
+		if !success {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "unauthorized or user not found"})
+		}
+
+		// Broadcast mute status to room
+		muteMsg := mustMarshal(hub.Message{
+			Type: "user-muted",
+			Payload: mustMarshal(map[string]interface{}{
+				"userId":  body.TargetUserID,
+				"mutedBy": body.AdminUserID,
+			}),
+		})
+		room.BroadcastToAll(muteMsg)
+
+		return c.JSON(fiber.Map{"success": true})
+	})
+
+	// Admin actions - unmute user
+	api.Post("/room/:id/unmute", func(c *fiber.Ctx) error {
+		roomID := c.Params("id")
+		var body struct {
+			AdminUserID  string `json:"adminUserId"`
+			TargetUserID string `json:"targetUserId"`
+		}
+		if err := c.BodyParser(&body); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "cannot parse json"})
+		}
+
+		room := hubInstance.GetRoom(roomID)
+		if room == nil {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "room not found"})
+		}
+
+		success := room.UnmuteUser(body.AdminUserID, body.TargetUserID)
+		if !success {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "unauthorized or user not found"})
+		}
+
+		// Broadcast unmute status to room
+		unmuteMsg := mustMarshal(hub.Message{
+			Type: "user-unmuted",
+			Payload: mustMarshal(map[string]interface{}{
+				"userId":    body.TargetUserID,
+				"unmutedBy": body.AdminUserID,
+			}),
+		})
+		room.BroadcastToAll(unmuteMsg)
+
+		return c.JSON(fiber.Map{"success": true})
+	})
+
+	// Serve room pages
+	app.Get("/room/:id", func(c *fiber.Ctx) error {
+		return c.SendFile("./public/index.html")
+	})
+
+	app.Get("/create-room", func(c *fiber.Ctx) error {
+		return c.SendFile("./public/index.html")
 	})
 
 	// --- WebSocket Handling ---
@@ -90,6 +221,7 @@ func main() {
 	app.Get("/ws/:roomID", websocket.New(func(c *websocket.Conn) {
 		roomID := c.Params("roomID")
 		userID := c.Query("userID")
+		userName := c.Query("userName")
 
 		if roomID == "" || userID == "" {
 			log.Println("RoomID or UserID is missing")
@@ -97,42 +229,95 @@ func main() {
 			return
 		}
 
+		// Get room info from database
+		roomInfo, err := store.GetRoomByIdString(roomID)
+		if err != nil {
+			log.Printf("Room %s not found in database: %v", roomID, err)
+			c.Close()
+			return
+		}
+
 		room := hubInstance.GetOrCreateRoom(roomID)
-		client := &hub.Client{Conn: c, RoomID: roomID, UserID: userID}
-		room.AddClient(client)
+		room.SetRoomInfo(roomInfo.Name, roomInfo.CreatorID)
 
-		log.Printf("Client %s connected to room %s", userID, roomID)
+		client := &hub.Client{
+			Conn:     c,
+			RoomID:   roomID,
+			UserID:   userID,
+			UserName: userName,
+			IsMuted:  false,
+			IsAdmin:  userID == roomInfo.CreatorID.Hex(),
+		}
 
-		// Announce new user to the room
-		// First, get list of existing users to send to the newcomer
+		// Get list of existing users BEFORE adding the new client
+		existingUsers := []map[string]interface{}{}
 		existingUserIDs := []string{}
-		room.Broadcast(c, mustMarshal(hub.Message{
-			Type:    "user-joined",
-			Payload: json.RawMessage(`{"userId":"` + userID + `"}`),
-		}))
 
 		for _, existingClient := range room.Clients {
 			if existingClient.UserID != userID {
 				existingUserIDs = append(existingUserIDs, existingClient.UserID)
+				existingUsers = append(existingUsers, map[string]interface{}{
+					"userId":   existingClient.UserID,
+					"userName": existingClient.UserName,
+					"isMuted":  existingClient.IsMuted,
+					"isAdmin":  existingClient.IsAdmin,
+				})
 			}
 		}
 
+		// Now add the client to the room
+		room.AddClient(client)
+
+		log.Printf("Client %s (%s) connected to room %s", userName, userID, roomID)
+
+		// Send room info to the new client
+		roomInfoMsg := mustMarshal(hub.Message{
+			Type: "room-info",
+			Payload: mustMarshal(map[string]interface{}{
+				"roomId":      roomID,
+				"roomName":    roomInfo.Name,
+				"memberCount": room.GetMemberCount(),
+				"isAdmin":     client.IsAdmin,
+			}),
+		})
+		c.WriteMessage(1, roomInfoMsg)
+
 		// Send the list of existing users to the new client
 		c.WriteJSON(hub.Message{
-			Type:    "existing-users",
-			Payload: mustMarshal(map[string][]string{"userIds": existingUserIDs}),
+			Type: "existing-users",
+			Payload: mustMarshal(map[string]interface{}{
+				"userIds": existingUserIDs,
+				"users":   existingUsers,
+			}),
 		})
+
+		// Announce new user to the room
+		room.Broadcast(c, mustMarshal(hub.Message{
+			Type: "user-joined",
+			Payload: mustMarshal(map[string]interface{}{
+				"userId":      userID,
+				"userName":    userName,
+				"memberCount": room.GetMemberCount(),
+			}),
+		}))
 
 		defer func() {
 			room.RemoveClient(c)
-			hubInstance.RemoveRoomIfEmpty(roomID)
+			memberCount := room.GetMemberCount()
+
 			// Announce user has left
 			room.Broadcast(nil, mustMarshal(hub.Message{
-				Type:    "user-left",
-				Payload: json.RawMessage(`{"userId":"` + userID + `"}`),
+				Type: "user-left",
+				Payload: mustMarshal(map[string]interface{}{
+					"userId":      userID,
+					"userName":    userName,
+					"memberCount": memberCount,
+				}),
 			}))
+
+			hubInstance.RemoveRoomIfEmpty(roomID)
 			c.Close()
-			log.Printf("Client %s disconnected from room %s", userID, roomID)
+			log.Printf("Client %s (%s) disconnected from room %s", userName, userID, roomID)
 		}()
 
 		// WebSocket message loop
@@ -160,8 +345,26 @@ func main() {
 					repackedMsg, _ := json.Marshal(message)
 					room.SendToTarget(message.Target, repackedMsg)
 				}
+			case "chat-message":
+				// Broadcast chat messages to all users
+				var chatPayload struct {
+					Message string `json:"message"`
+				}
+				if err := json.Unmarshal(message.Payload, &chatPayload); err == nil {
+					chatMsg := mustMarshal(hub.Message{
+						Type:   "chat-message",
+						Sender: userID,
+						Payload: mustMarshal(map[string]interface{}{
+							"message":   chatPayload.Message,
+							"userName":  userName,
+							"userId":    userID,
+							"timestamp": time.Now().Unix(),
+						}),
+					})
+					room.BroadcastToAll(chatMsg)
+				}
 			default:
-				// Broadcast other messages (e.g., chat)
+				// Broadcast other messages (e.g., voice activity)
 				repackedMsg, _ := json.Marshal(message)
 				room.Broadcast(c, repackedMsg)
 			}
