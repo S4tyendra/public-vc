@@ -1,856 +1,508 @@
-// public/script.js
-document.addEventListener("DOMContentLoaded", () => {
-    // --- STATE MANAGEMENT ---
-    let currentUser = null;
+document.addEventListener('DOMContentLoaded', () => {
+    // --- DOM Elements ---
+    const lobbyView = document.getElementById('lobby-view');
+    const roomView = document.getElementById('room-view');
+    const userNameInput = document.getElementById('user-name-input');
+    const createRoomBtn = document.getElementById('create-room-btn');
+    const roomNameInput = document.getElementById('room-name-input');
+    const isPublicCheckbox = document.getElementById('is-public-checkbox');
+    const publicRoomsList = document.getElementById('public-rooms-list');
+    const noRoomsMsg = document.getElementById('no-rooms-msg');
+    const roomHeader = document.getElementById('room-header');
+    const videoGrid = document.getElementById('video-grid');
+    const participantsList = document.getElementById('participants-list');
+    const participantCount = document.getElementById('participant-count');
+    const chatMessages = document.getElementById('chat-messages');
+    const chatForm = document.getElementById('chat-form');
+    const chatInput = document.getElementById('chat-input');
+    const muteAudioBtn = document.getElementById('mute-audio-btn');
+    const muteVideoBtn = document.getElementById('mute-video-btn');
+    const leaveBtn = document.getElementById('leave-btn');
+
+    // --- State Variables ---
+    let userId = localStorage.getItem('userId') || uuidv4();
+    localStorage.setItem('userId', userId);
+    let userName = localStorage.getItem('userName') || '';
+    let roomId = null;
     let localStream = null;
-    let socket = null;
-    let peerConnections = {}; // { peerId: RTCPeerConnection }
-    let currentRoom = null;
-    let isLocalMuted = false;
-    let participants = {};
-    let privateRooms = [];
+    let ws = null;
+    let peerConnections = {};
+    let isAdmin = false;
+
+    if (userName) {
+        userNameInput.value = userName;
+    }
     
+    // Use Google's public STUN servers. For production, you'd want your own TURN server.
     const peerConnectionConfig = {
-        'iceServers': [
+        iceServers: [
             { 'urls': 'stun:stun.l.google.com:19302' },
             { 'urls': 'stun:stun1.l.google.com:19302' }
         ]
     };
 
-    // --- DOM ELEMENTS ---
-    const views = {
-        login: document.getElementById('login-view'),
-        lobby: document.getElementById('lobby-view'),
-        room: document.getElementById('room-view'),
-    };
-    
-    // Login elements
-    const loginButton = document.getElementById('login-button');
-    const nameInput = document.getElementById('name-input');
-    
-    // Lobby elements
-    const welcomeMessage = document.getElementById('welcome-message');
-    const roomList = document.getElementById('room-list');
-    const privateRoomList = document.getElementById('private-room-list');
-    const refreshRoomsButton = document.getElementById('refresh-rooms-button');
-    const createRoomButton = document.getElementById('create-room-button');
-    const roomNameInput = document.getElementById('room-name-input');
-    const isPublicCheckbox = document.getElementById('is-public-checkbox');
-    const privateRoomIdInput = document.getElementById('private-room-id');
-    const joinPrivateButton = document.getElementById('join-private-button');
-    
-    // Room elements
-    const roomTitle = document.getElementById('room-title');
-    const roomStatus = document.getElementById('room-status');
-    const participantCount = document.getElementById('participant-count');
-    const participantList = document.getElementById('participant-list');
-    const audioContainer = document.getElementById('audio-container');
-    const leaveRoomButton = document.getElementById('leave-room-button');
-    const muteSelfButton = document.getElementById('mute-self-button');
-    const chatMessages = document.getElementById('chat-messages');
-    const chatInput = document.getElementById('chat-input');
-    const sendChatButton = document.getElementById('send-chat-button');
-
-    // --- UI LOGIC ---
-    function showView(viewName) {
-        Object.values(views).forEach(view => view.classList.remove('active'));
-        views[viewName].classList.add('active');
+    // --- Utility Functions ---
+    function uuidv4() {
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+            const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
     }
 
-    // --- INITIALIZATION ---
-    async function init() {
-        // Check URL for room ID
-        const path = window.location.pathname;
-        const roomMatch = path.match(/^\/room\/([a-f0-9]{24})$/);
-        
-        // Check for existing user in localStorage
-        const storedUser = localStorage.getItem('lancall-user');
-        const storedPrivateRooms = localStorage.getItem('lancall-private-rooms');
-        
-        if (storedPrivateRooms) {
-            privateRooms = JSON.parse(storedPrivateRooms);
-        }
-        
-        if (storedUser) {
-            currentUser = JSON.parse(storedUser);
-            if (roomMatch) {
-                // Direct room join from URL
-                const roomId = roomMatch[1];
-                try {
-                    const roomInfo = await api.get(`/room/${roomId}`);
-                    joinRoom(roomId, roomInfo.name);
-                } catch (error) {
-                    console.error('Room not found:', error);
-                    showLobby();
-                }
-            } else {
-                showLobby();
-            }
-        } else {
-            if (roomMatch) {
-                // Store intended room for after login
-                sessionStorage.setItem('intended-room', roomMatch[1]);
-            }
-            showView('login');
-        }
-    }
+    const API_BASE = `${window.location.protocol}//${window.location.host}/api`;
 
-    // --- API HELPERS ---
-    const api = {
-        post: (endpoint, body) => fetch(`/api${endpoint}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-        }).then(res => res.json()),
-        get: (endpoint) => fetch(`/api${endpoint}`).then(res => res.json()),
-    };
-
-    // --- LOGIN LOGIC ---
-    loginButton.addEventListener('click', async () => {
-        const name = nameInput.value.trim();
-        if (!name) return alert('Please enter a name.');
-        
-        try {
-            const user = await api.post('/user', { name });
-            currentUser = user;
-            localStorage.setItem('lancall-user', JSON.stringify(user));
-            
-            // Check for intended room
-            const intendedRoom = sessionStorage.getItem('intended-room');
-            if (intendedRoom) {
-                sessionStorage.removeItem('intended-room');
-                try {
-                    const roomInfo = await api.get(`/room/${intendedRoom}`);
-                    joinRoom(intendedRoom, roomInfo.name);
-                } catch (error) {
-                    console.error('Room not found:', error);
-                    showLobby();
-                }
-            } else {
-                showLobby();
-            }
-        } catch (error) {
-            console.error('Login failed:', error);
-            alert('Login failed. Please try again.');
-        }
-    });
-    
-    nameInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') loginButton.click();
-    });
-
-    // --- LOBBY LOGIC ---
-    async function showLobby() {
-        welcomeMessage.textContent = `Welcome, ${currentUser.name}!`;
-        window.history.pushState({}, '', '/');
-        showView('lobby');
-        await loadPublicRooms();
-        loadPrivateRooms();
-    }
-
+    // --- Lobby Logic ---
     async function loadPublicRooms() {
         try {
-            const rooms = await api.get('/rooms');
-            roomList.innerHTML = '';
+            const response = await fetch(`${API_BASE}/rooms`);
+            if (!response.ok) throw new Error('Failed to fetch rooms');
+            const rooms = await response.json() || [];
+
+            publicRoomsList.innerHTML = '';
             if (rooms.length === 0) {
-                roomList.innerHTML = '<li class="room-item"><div class="room-info"><h4>No public rooms available</h4><p>Create one to get started!</p></div></li>';
-            } else {
-                rooms.forEach(room => {
-                    const li = document.createElement('li');
-                    li.className = 'room-item';
-                    
-                    const roomInfo = document.createElement('div');
-                    roomInfo.className = 'room-info';
-                    roomInfo.innerHTML = `
-                        <h4>${escapeHtml(room.name)}</h4>
-                        <p>${room.memberCount || 0} members</p>
-                    `;
-                    
-                    const roomActions = document.createElement('div');
-                    roomActions.className = 'room-actions';
-                    const joinButton = document.createElement('button');
-                    joinButton.textContent = 'Join';
-                    joinButton.className = 'primary';
-                    joinButton.onclick = () => joinRoom(room.id, room.name);
-                    roomActions.appendChild(joinButton);
-                    
-                    li.appendChild(roomInfo);
-                    li.appendChild(roomActions);
-                    roomList.appendChild(li);
-                });
+                noRoomsMsg.style.display = 'block';
+                return;
             }
-        } catch (error) {
-            console.error('Failed to load rooms:', error);
-            roomList.innerHTML = '<li class="room-item"><div class="room-info"><h4>Error loading rooms</h4><p>Please try again</p></div></li>';
-        }
-    }
-    
-    function loadPrivateRooms() {
-        privateRoomList.innerHTML = '';
-        if (privateRooms.length === 0) {
-            privateRoomList.innerHTML = '<li class="room-item"><div class="room-info"><h4>No private rooms</h4><p>Join one by ID to see it here</p></div></li>';
-        } else {
-            privateRooms.forEach(room => {
+            noRoomsMsg.style.display = 'none';
+
+            rooms.forEach(room => {
                 const li = document.createElement('li');
-                li.className = 'room-item';
-                
-                const roomInfo = document.createElement('div');
-                roomInfo.className = 'room-info';
-                roomInfo.innerHTML = `
-                    <h4>${escapeHtml(room.name)}</h4>
-                    <p>Private Room</p>
+                li.innerHTML = `
+                    <span>${room.name} (${room.memberCount} members)</span>
+                    <button class="join-btn" data-room-id="${room.id}">Join</button>
                 `;
-                
-                const roomActions = document.createElement('div');
-                roomActions.className = 'room-actions';
-                const joinButton = document.createElement('button');
-                joinButton.textContent = 'Join';
-                joinButton.className = 'primary';
-                joinButton.onclick = () => joinRoom(room.id, room.name);
-                roomActions.appendChild(joinButton);
-                
-                li.appendChild(roomInfo);
-                li.appendChild(roomActions);
-                privateRoomList.appendChild(li);
+                publicRoomsList.appendChild(li);
             });
-        }
-    }
-
-    refreshRoomsButton.addEventListener('click', loadPublicRooms);
-
-    createRoomButton.addEventListener('click', async () => {
-        const name = roomNameInput.value.trim();
-        if (!name) return alert('Please enter a room name.');
-
-        try {
-            const room = await api.post('/room', {
-                name,
-                isPublic: isPublicCheckbox.checked,
-                creatorId: currentUser.id,
-            });
-            
-            // Add to private rooms if it's private
-            if (!room.isPublic) {
-                addPrivateRoom(room.id, room.name);
-            }
-            
-            joinRoom(room.id, room.name);
         } catch (error) {
-            console.error('Failed to create room:', error);
-            alert('Failed to create room.');
+            console.error('Error loading public rooms:', error);
+            noRoomsMsg.innerText = 'Could not load rooms.';
+            noRoomsMsg.style.display = 'block';
         }
-    });
-    
-    joinPrivateButton.addEventListener('click', async () => {
-        const roomId = privateRoomIdInput.value.trim();
-        if (!roomId) return alert('Please enter a room ID.');
+    }
+
+    async function handleCreateRoom() {
+        userName = userNameInput.value.trim();
+        if (!userName) {
+            alert('Please enter your name.');
+            return;
+        }
+        localStorage.setItem('userName', userName);
         
-        try {
-            const roomInfo = await api.get(`/room/${roomId}`);
-            addPrivateRoom(roomId, roomInfo.name);
-            joinRoom(roomId, roomInfo.name);
-        } catch (error) {
-            console.error('Room not found:', error);
-            alert('Room not found. Please check the room ID.');
-        }
-    });
-    
-    function addPrivateRoom(roomId, roomName) {
-        // Check if already exists
-        if (!privateRooms.find(r => r.id === roomId)) {
-            privateRooms.push({ id: roomId, name: roomName });
-            localStorage.setItem('lancall-private-rooms', JSON.stringify(privateRooms));
-            loadPrivateRooms();
-        }
-    }
-
-    // --- ROOM LOGIC ---
-    async function joinRoom(roomId, name) {
-        currentRoom = { id: roomId, name: name };
-        roomTitle.textContent = name;
-        window.history.pushState({}, '', `/room/${roomId}`);
-        showView('room');
-        roomStatus.textContent = 'Getting microphone access...';
-
-        try {
-            // Request audio with specific constraints
-            localStream = await navigator.mediaDevices.getUserMedia({ 
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    sampleRate: 44100
-                }, 
-                video: false 
-            });
-            
-            console.log('Local stream obtained:', localStream);
-            console.log('Audio tracks:', localStream.getAudioTracks());
-            
-            addLocalAudio();
-            roomStatus.textContent = 'Connecting to room...';
-            connectWebSocket(roomId);
-        } catch (error) {
-            console.error("Error getting user media:", error);
-            roomStatus.textContent = `Error: Could not access microphone (${error.name})`;
-            setTimeout(() => showLobby(), 3000);
-        }
-    }
-
-    function addLocalAudio() {
-        const audioCard = createAudioCard('local', 'You', true, currentRoom?.isAdmin || false);
-        const audio = document.createElement('audio');
-        audio.srcObject = localStream;
-        audio.muted = true; // Mute self to prevent feedback
-        audio.autoplay = true;
-        
-        // Add visual indicator for local audio
-        const indicator = document.createElement('div');
-        indicator.style.cssText = 'margin-top: 10px; color: #4CAF50; font-size: 12px;';
-        indicator.textContent = '🎤 Microphone Active';
-        audioCard.appendChild(indicator);
-        
-        // Don't add the audio element for local (it's muted anyway)
-        // audioCard.appendChild(audio);
-        audioContainer.appendChild(audioCard);
-        
-        updateMuteButton();
-        updateParticipantList(); // Initial participant list update
-    }
-
-    leaveRoomButton.addEventListener('click', () => {
-        if (socket) {
-            socket.close();
-        }
-        cleanUpRoom();
-        showLobby();
-    });
-    
-    muteSelfButton.addEventListener('click', () => {
-        isLocalMuted = !isLocalMuted;
-        if (localStream) {
-            localStream.getAudioTracks().forEach(track => {
-                track.enabled = !isLocalMuted;
-            });
-        }
-        updateMuteButton();
-        updateLocalAudioCard();
-    });
-    
-    function updateMuteButton() {
-        muteSelfButton.textContent = isLocalMuted ? '🔊 Unmute' : '🔇 Mute';
-    }
-    
-    function updateLocalAudioCard() {
-        const localCard = document.getElementById('audio-card-local');
-        if (localCard) {
-            localCard.classList.toggle('muted', isLocalMuted);
-        }
-    }
-
-    function cleanUpRoom() {
-        // Close all peer connections
-        for (const peerId in peerConnections) {
-            if (peerConnections[peerId]) {
-                peerConnections[peerId].close();
-            }
-        }
-        peerConnections = {};
-        participants = {};
-
-        // Stop local media tracks
-        if (localStream) {
-            localStream.getTracks().forEach(track => track.stop());
-            localStream = null;
-        }
-
-        // Clear UI
-        audioContainer.innerHTML = '';
-        participantList.innerHTML = '';
-        chatMessages.innerHTML = '';
-        participantCount.textContent = '0';
-        socket = null;
-        
-        // Reset room state
-        if (currentRoom) {
-            currentRoom.isAdmin = false;
-        }
-        currentRoom = null;
-        isLocalMuted = false;
-    }
-
-    // --- CHAT LOGIC ---
-    sendChatButton.addEventListener('click', sendChatMessage);
-    chatInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') sendChatMessage();
-    });
-    
-    function sendChatMessage() {
-        const message = chatInput.value.trim();
-        if (!message || !socket) return;
-        
-        socket.send(JSON.stringify({
-            type: 'chat-message',
-            payload: { message: message }
-        }));
-        
-        chatInput.value = '';
-    }
-    
-    function addChatMessage(senderId, senderName, message, timestamp, isOwn = false) {
-        const messageEl = document.createElement('div');
-        messageEl.className = `chat-message ${isOwn ? 'own' : ''}`;
-        
-        const time = new Date(timestamp * 1000).toLocaleTimeString();
-        messageEl.innerHTML = `
-            <div class="chat-sender">${escapeHtml(senderName)}</div>
-            <div class="chat-text">${escapeHtml(message)}</div>
-            <div class="chat-time">${time}</div>
-        `;
-        
-        chatMessages.appendChild(messageEl);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-    }
-
-    // --- WEBSOCKET & WEBRTC LOGIC ---
-    function connectWebSocket(roomId) {
-        const wsURL = `wss://${window.location.host}/ws/${roomId}?userID=${currentUser.id}&userName=${encodeURIComponent(currentUser.name)}`;
-        socket = new WebSocket(wsURL);
-
-        socket.onopen = () => {
-            roomStatus.textContent = 'Connected. Waiting for others...';
-        };
-
-        socket.onmessage = async (event) => {
-            const message = JSON.parse(event.data);
-            console.log("WS Received:", message.type, message);
-
-            switch (message.type) {
-                case 'room-info':
-                    const roomInfo = JSON.parse(message.payload);
-                    roomStatus.textContent = `Connected to ${roomInfo.roomName}`;
-                    updateParticipantCount(roomInfo.memberCount);
-                    
-                    // Set current room info including admin status
-                    if (currentRoom) {
-                        currentRoom.isAdmin = roomInfo.isAdmin;
-                    }
-                    
-                    // Update participant list to show self with correct admin status
-                    updateParticipantList();
-                    break;
-                    
-                case 'existing-users':
-                    const { userIds, users } = JSON.parse(message.payload);
-                    console.log("Existing users:", userIds, users);
-                    roomStatus.textContent = userIds.length > 0 ? `In room with ${userIds.length} other(s).` : 'Connected. Waiting for others...';
-                    updateParticipantCount(userIds.length + 1); // +1 for self
-                    
-                    // Add existing participants
-                    if (users && users.length > 0) {
-                        users.forEach(user => {
-                            console.log("Adding existing participant:", user);
-                            addParticipant(user.userId, user.userName, user.isMuted, user.isAdmin);
-                        });
-                    }
-                    
-                    // Update participant list after adding all users
-                    updateParticipantList();
-                    
-                    // Create offers for existing users (only if there are any)
-                    if (userIds.length > 0) {
-                        for (const userId of userIds) {
-                            console.log("Creating offer for existing user:", userId);
-                            await createAndSendOffer(userId);
-                        }
-                    }
-                    break;
-                
-                case 'user-joined':
-                    const joinData = JSON.parse(message.payload);
-                    console.log("User joined:", joinData);
-                    roomStatus.textContent = `${joinData.userName} joined.`;
-                    updateParticipantCount(joinData.memberCount);
-                    
-                    // Add the new user to participants (this is important!)
-                    if (joinData.userId !== currentUser.id) {
-                        addParticipant(joinData.userId, joinData.userName, false, false);
-                        updateParticipantList();
-                        console.log("Added new participant:", joinData.userId, joinData.userName);
-                        
-                        // IMPORTANT: Existing users should also create an offer to the new user
-                        // This creates a bidirectional connection
-                        console.log("Creating offer for new user:", joinData.userId);
-                        await createAndSendOffer(joinData.userId);
-                    }
-                    break;
-                
-                case 'user-left':
-                    const leftData = JSON.parse(message.payload);
-                    roomStatus.textContent = `${leftData.userName} left.`;
-                    updateParticipantCount(leftData.memberCount);
-                    if (peerConnections[leftData.userId]) {
-                        peerConnections[leftData.userId].close();
-                        delete peerConnections[leftData.userId];
-                    }
-                    removeParticipant(leftData.userId);
-                    document.getElementById(`audio-card-${leftData.userId}`)?.remove();
-                    break;
-
-                case 'webrtc-offer':
-                    await handleOffer(message.sender, JSON.parse(message.payload).offer);
-                    break;
-                
-                case 'webrtc-answer':
-                    await handleAnswer(message.sender, JSON.parse(message.payload).answer);
-                    break;
-
-                case 'webrtc-ice-candidate':
-                    await handleIceCandidate(message.sender, JSON.parse(message.payload).candidate);
-                    break;
-                    
-                case 'chat-message':
-                    const chatData = JSON.parse(message.payload);
-                    addChatMessage(
-                        chatData.userId, 
-                        chatData.userName, 
-                        chatData.message, 
-                        chatData.timestamp,
-                        chatData.userId === currentUser.id
-                    );
-                    break;
-                    
-                case 'user-muted':
-                    const muteData = JSON.parse(message.payload);
-                    updateParticipantMuteStatus(muteData.userId, true);
-                    if (muteData.userId === currentUser.id) {
-                        roomStatus.textContent = 'You have been muted by an admin.';
-                    }
-                    break;
-                    
-                case 'user-unmuted':
-                    const unmuteData = JSON.parse(message.payload);
-                    updateParticipantMuteStatus(unmuteData.userId, false);
-                    if (unmuteData.userId === currentUser.id) {
-                        roomStatus.textContent = 'You have been unmuted by an admin.';
-                    }
-                    break;
-            }
-        };
-
-        socket.onclose = () => {
-            roomStatus.textContent = 'Disconnected.';
-            setTimeout(() => {
-                cleanUpRoom();
-                showLobby();
-            }, 2000);
-        };
-
-        socket.onerror = (err) => {
-            console.error("WebSocket Error:", err);
-            roomStatus.textContent = 'Connection error.';
-        };
-    }
-
-    function createPeerConnection(peerId) {
-        const pc = new RTCPeerConnection(peerConnectionConfig);
-        
-        // Add local stream tracks with proper configuration
-        if (localStream) {
-            localStream.getTracks().forEach(track => {
-                console.log(`Adding local track to peer ${peerId}:`, track.kind, track.enabled);
-                pc.addTrack(track, localStream);
-            });
-        }
-
-        // Handle remote stream
-        pc.ontrack = (event) => {
-            console.log(`Track received from ${peerId}:`, event.track.kind, event.track.enabled);
-            if (event.streams && event.streams[0]) {
-                addRemoteAudio(peerId, event.streams[0]);
-            }
-        };
-
-        // Handle ICE candidates
-        pc.onicecandidate = (event) => {
-            if (event.candidate) {
-                console.log(`Sending ICE candidate to ${peerId}`);
-                socket.send(JSON.stringify({
-                    type: 'webrtc-ice-candidate',
-                    target: peerId,
-                    payload: { candidate: event.candidate }
-                }));
-            }
-        };
-
-        // Handle connection state changes
-        pc.onconnectionstatechange = () => {
-            console.log(`Peer connection with ${peerId} state:`, pc.connectionState);
-        };
-
-        peerConnections[peerId] = pc;
-        return pc;
-    }
-
-    async function createAndSendOffer(peerId) {
-        console.log(`Creating offer for ${peerId}`);
-        try {
-            const pc = createPeerConnection(peerId);
-            const offer = await pc.createOffer({
-                offerToReceiveAudio: true,
-                offerToReceiveVideo: false
-            });
-            await pc.setLocalDescription(offer);
-            
-            console.log(`Sending offer to ${peerId}:`, offer);
-            socket.send(JSON.stringify({
-                type: 'webrtc-offer',
-                target: peerId,
-                payload: { offer: offer }
-            }));
-        } catch (error) {
-            console.error(`Failed to create offer for ${peerId}:`, error);
-        }
-    }
-
-    async function handleOffer(peerId, offer) {
-        console.log(`Handling offer from ${peerId}:`, offer);
-        try {
-            const pc = createPeerConnection(peerId);
-            await pc.setRemoteDescription(new RTCSessionDescription(offer));
-            
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-
-            console.log(`Sending answer to ${peerId}:`, answer);
-            socket.send(JSON.stringify({
-                type: 'webrtc-answer',
-                target: peerId,
-                payload: { answer: answer }
-            }));
-        } catch (error) {
-            console.error(`Failed to handle offer from ${peerId}:`, error);
-        }
-    }
-
-    async function handleAnswer(peerId, answer) {
-        console.log(`Handling answer from ${peerId}:`, answer);
-        try {
-            const pc = peerConnections[peerId];
-            if (pc) {
-                await pc.setRemoteDescription(new RTCSessionDescription(answer));
-                console.log(`Answer processed for ${peerId}`);
-            } else {
-                console.error(`No peer connection found for ${peerId}`);
-            }
-        } catch (error) {
-            console.error(`Failed to handle answer from ${peerId}:`, error);
-        }
-    }
-
-    async function handleIceCandidate(peerId, candidate) {
-        console.log(`Handling ICE candidate from ${peerId}`);
-        const pc = peerConnections[peerId];
-        if (pc && candidate) {
-            try {
-                await pc.addIceCandidate(new RTCIceCandidate(candidate));
-            } catch (e) {
-                console.error('Error adding received ice candidate', e);
-            }
-        }
-    }
-
-    function addRemoteAudio(peerId, stream) {
-        if (document.getElementById(`audio-card-${peerId}`)) {
-            console.log(`Audio card for ${peerId} already exists, updating stream`);
-            const existingAudio = document.querySelector(`#audio-card-${peerId} audio`);
-            if (existingAudio) {
-                existingAudio.srcObject = stream;
-            }
+        const roomName = roomNameInput.value.trim();
+        if (!roomName) {
+            alert('Please enter a room name.');
             return;
         }
 
-        const participant = participants[peerId];
-        const userName = participant ? participant.name : `User ${peerId.substring(0, 6)}...`;
-        const isAdmin = participant ? participant.isAdmin : false;
-        
-        console.log(`Creating audio card for ${peerId} (${userName})`);
-        
-        const audioCard = createAudioCard(peerId, userName, false, isAdmin);
-        const audio = document.createElement('audio');
-        audio.srcObject = stream;
-        audio.autoplay = true;
-        audio.controls = false; // Remove controls for cleaner UI
-        audio.volume = 1.0;
-        
-        // Add event listeners for debugging
-        audio.onloadedmetadata = () => {
-            console.log(`Audio metadata loaded for ${peerId}`);
-        };
-        audio.onplay = () => {
-            console.log(`Audio started playing for ${peerId}`);
-        };
-        audio.onerror = (e) => {
-            console.error(`Audio error for ${peerId}:`, e);
-        };
-        
-        // Try to play the audio
-        audio.play().then(() => {
-            console.log(`Audio play() succeeded for ${peerId}`);
-        }).catch(e => {
-            console.error(`Audio play() failed for ${peerId}:`, e);
-            // Try again after user interaction
-            setTimeout(() => {
-                audio.play().catch(err => console.log('Retry audio play failed:', err));
-            }, 1000);
-        });
-        
-        audioCard.appendChild(audio);
-        audioContainer.appendChild(audioCard);
-    }
-    
-    function createAudioCard(id, name, isLocal = false, isAdmin = false) {
-        const card = document.createElement('div');
-        card.className = `audio-card ${isAdmin ? 'admin' : ''}`;
-        card.id = `audio-card-${id}`;
-        
-        const nameEl = document.createElement('p');
-        nameEl.textContent = name + (isAdmin ? ' (Admin)' : '') + (isLocal ? ' (You)' : '');
-        card.appendChild(nameEl);
-        
-        return card;
-    }
-    
-    // --- PARTICIPANT MANAGEMENT ---
-    function addParticipant(userId, userName, isMuted, isAdmin) {
-        console.log(`Adding participant: ${userId} (${userName})`);
-        participants[userId] = { name: userName, isMuted, isAdmin };
-        console.log("Current participants:", participants);
-        updateParticipantList();
-    }
-    
-    function removeParticipant(userId) {
-        console.log(`Removing participant: ${userId}`);
-        delete participants[userId];
-        console.log("Current participants:", participants);
-        updateParticipantList();
-    }
-    
-    function updateParticipantMuteStatus(userId, isMuted) {
-        if (participants[userId]) {
-            participants[userId].isMuted = isMuted;
-            updateParticipantList();
-            
-            // Update audio card
-            const audioCard = document.getElementById(`audio-card-${userId}`);
-            if (audioCard) {
-                audioCard.classList.toggle('muted', isMuted);
-            }
-        }
-    }
-    
-    function updateParticipantCount(count) {
-        console.log("Updating participant count:", count);
-        participantCount.textContent = count;
-    }
-    
-    function updateParticipantList() {
-        console.log("Updating participant list. Current participants:", participants);
-        participantList.innerHTML = '';
-        
-        // Add self first with correct admin status
-        const isCurrentUserAdmin = currentRoom && currentRoom.isAdmin;
-        console.log("Current user admin status:", isCurrentUserAdmin);
-        const selfEl = createParticipantElement(
-            currentUser.id, 
-            currentUser.name, 
-            isLocalMuted, 
-            isCurrentUserAdmin, 
-            true
-        );
-        participantList.appendChild(selfEl);
-        
-        // Add other participants
-        const participantEntries = Object.entries(participants);
-        console.log("Adding participants:", participantEntries);
-        participantEntries.forEach(([userId, participant]) => {
-            console.log(`Adding participant UI: ${userId} - ${participant.name}`);
-            const participantEl = createParticipantElement(
-                userId, 
-                participant.name, 
-                participant.isMuted, 
-                participant.isAdmin, 
-                false
-            );
-            participantList.appendChild(participantEl);
-        });
-        
-        console.log("Participant list updated. Total participants in UI:", participantList.children.length);
-    }
-    
-    function createParticipantElement(userId, userName, isMuted, isAdmin, isSelf) {
-        const el = document.createElement('div');
-        el.className = `participant ${isAdmin ? 'admin' : ''} ${isMuted ? 'muted' : ''}`;
-        
-        const info = document.createElement('div');
-        info.className = 'participant-info';
-        info.innerHTML = `
-            <div class="participant-name">${escapeHtml(userName)}${isAdmin ? ' (Admin)' : ''}${isSelf ? ' (You)' : ''}</div>
-            <div class="participant-status">${isMuted ? 'Muted' : 'Active'}</div>
-        `;
-        
-        const controls = document.createElement('div');
-        controls.className = 'participant-controls';
-        
-        // Add admin controls if current user is admin and target is not self
-        const isCurrentUserAdmin = currentRoom && currentRoom.isAdmin;
-        if (isCurrentUserAdmin && !isSelf) {
-            const muteBtn = document.createElement('button');
-            muteBtn.textContent = isMuted ? 'Unmute' : 'Mute';
-            muteBtn.onclick = () => toggleUserMute(userId, !isMuted);
-            controls.appendChild(muteBtn);
-        }
-        
-        el.appendChild(info);
-        el.appendChild(controls);
-        return el;
-    }
-    
-    async function toggleUserMute(userId, shouldMute) {
         try {
-            const endpoint = shouldMute ? 'mute' : 'unmute';
-            await api.post(`/room/${currentRoom.id}/${endpoint}`, {
-                adminUserId: currentUser.id,
-                targetUserId: userId
+            const response = await fetch(`${API_BASE}/room`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: roomName,
+                    isPublic: isPublicCheckbox.checked,
+                    creatorId: userId
+                })
             });
+            if (!response.ok) throw new Error('Failed to create room');
+            const room = await response.json();
+            joinRoom(room.id, userName);
         } catch (error) {
-            console.error('Failed to toggle mute:', error);
-            alert('Failed to change mute status.');
+            console.error('Error creating room:', error);
+            alert('Could not create room. See console for details.');
         }
-    }
-    
-    // --- UTILITY FUNCTIONS ---
-    function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
     }
 
-    // --- START THE APP ---
-    init();
+    function handleJoinRoomClick(event) {
+        if (event.target.classList.contains('join-btn')) {
+            userName = userNameInput.value.trim();
+            if (!userName) {
+                alert('Please enter your name to join a room.');
+                return;
+            }
+            localStorage.setItem('userName', userName);
+            const selectedRoomId = event.target.dataset.roomId;
+            joinRoom(selectedRoomId, userName);
+        }
+    }
+
+    // --- Room Logic ---
+    async function joinRoom(rId, uName) {
+        roomId = rId;
+        userName = uName;
+
+        lobbyView.style.display = 'none';
+        roomView.style.display = 'block';
+
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            addVideoStream(localStream, userId, 'You', true);
+            updateMuteButtons();
+        } catch (error) {
+            console.error('Error accessing media devices.', error);
+            alert('Could not access camera and microphone. Please check permissions.');
+            leaveRoom();
+            return;
+        }
+
+        connectWebSocket();
+    }
     
-    // Add click handler to enable audio context on user interaction
-    document.addEventListener('click', function enableAudio() {
-        // Try to resume any suspended audio contexts
-        if (typeof AudioContext !== 'undefined') {
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            if (audioContext.state === 'suspended') {
-                audioContext.resume().then(() => {
-                    console.log('Audio context resumed');
+    function leaveRoom() {
+        if (ws) {
+            ws.close();
+        }
+        
+        localStream?.getTracks().forEach(track => track.stop());
+        localStream = null;
+
+        for (const peerId in peerConnections) {
+            peerConnections[peerId].close();
+        }
+        peerConnections = {};
+
+        videoGrid.innerHTML = '';
+        participantsList.innerHTML = '';
+        chatMessages.innerHTML = '';
+        isAdmin = false;
+        
+        roomView.style.display = 'none';
+        lobbyView.style.display = 'block';
+        loadPublicRooms();
+    }
+
+
+    // --- WebSocket Communication ---
+    function connectWebSocket() {
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${window.location.host}/ws/${roomId}?userID=${userId}&userName=${encodeURIComponent(userName)}`;
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+            console.log('WebSocket connection established');
+        };
+
+        ws.onmessage = (event) => {
+            const message = JSON.parse(event.data);
+            handleWebSocketMessage(message);
+        };
+
+        ws.onclose = () => {
+            console.log('WebSocket connection closed');
+            alert('Connection to the room has been lost.');
+            leaveRoom();
+        };
+
+        ws.onerror = (error) => {
+            console.error('WebSocket error:', error);
+        };
+    }
+
+    function sendMessage(message) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(message));
+        }
+    }
+
+    function handleWebSocketMessage(message) {
+        // console.log('Received message:', message);
+        switch (message.type) {
+            case 'room-info':
+                roomHeader.textContent = `${message.payload.roomName}`;
+                participantCount.textContent = message.payload.memberCount;
+                isAdmin = message.payload.isAdmin;
+                updateParticipantList();
+                break;
+            case 'existing-users':
+                // This signals we should create offers for everyone already here
+                message.payload.users.forEach(user => {
+                    const peerId = user.userId;
+                    const pc = createPeerConnection(peerId);
+                    // Create offer
+                    pc.createOffer()
+                        .then(offer => pc.setLocalDescription(offer))
+                        .then(() => {
+                            sendMessage({
+                                type: 'webrtc-offer',
+                                target: peerId,
+                                payload: pc.localDescription
+                            });
+                        })
+                        .catch(e => console.error(`Error creating offer for ${peerId}:`, e));
+                });
+                updateParticipantList();
+                break;
+            case 'user-joined':
+                console.log(`User joined: ${message.payload.userName}`);
+                participantCount.textContent = message.payload.memberCount;
+                updateParticipantList();
+                addChatMessage({ system: true, message: `${message.payload.userName} has joined the room.` });
+                break;
+            case 'user-left':
+                console.log(`User left: ${message.payload.userName}`);
+                participantCount.textContent = message.payload.memberCount;
+                removeVideoStream(message.payload.userId);
+                if (peerConnections[message.payload.userId]) {
+                    peerConnections[message.payload.userId].close();
+                    delete peerConnections[message.payload.userId];
+                }
+                updateParticipantList();
+                 addChatMessage({ system: true, message: `${message.payload.userName} has left the room.` });
+                break;
+            case 'webrtc-offer':
+                handleOffer(message);
+                break;
+            case 'webrtc-answer':
+                handleAnswer(message);
+                break;
+            case 'webrtc-ice-candidate':
+                handleIceCandidate(message);
+                break;
+            case 'chat-message':
+                addChatMessage(message.payload);
+                break;
+            case 'user-muted':
+            case 'user-unmuted':
+                updateParticipantList(); // Easiest way to refresh mute status
+                break;
+            default:
+                console.warn('Unknown message type received:', message.type);
+        }
+    }
+
+    // --- WebRTC Signaling and Peer Connection Logic ---
+    function createPeerConnection(peerId) {
+        if (peerConnections[peerId]) {
+            return peerConnections[peerId];
+        }
+        const pc = new RTCPeerConnection(peerConnectionConfig);
+        peerConnections[peerId] = pc;
+
+        // Add local stream tracks to the new connection
+        localStream.getTracks().forEach(track => {
+            pc.addTrack(track, localStream);
+        });
+
+        pc.onicecandidate = (event) => {
+            if (event.candidate) {
+                sendMessage({
+                    type: 'webrtc-ice-candidate',
+                    target: peerId,
+                    payload: event.candidate
                 });
             }
+        };
+
+        pc.ontrack = (event) => {
+            // When a remote track is received, add it to a video element
+            const stream = event.streams[0];
+            // Find the user name from participants list
+            const pList = document.getElementById(`participant-${peerId}`);
+            const pName = pList ? pList.dataset.username : 'Peer';
+            addVideoStream(stream, peerId, pName, false);
+        };
+        
+        pc.oniceconnectionstatechange = () => {
+            if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'closed') {
+                console.log(`ICE connection state for ${peerId}: ${pc.iceConnectionState}. Cleaning up.`);
+                removeVideoStream(peerId);
+                delete peerConnections[peerId];
+            }
+        };
+
+        return pc;
+    }
+
+    function handleOffer(message) {
+        const peerId = message.sender;
+        const pc = createPeerConnection(peerId);
+        pc.setRemoteDescription(new RTCSessionDescription(message.payload))
+            .then(() => pc.createAnswer())
+            .then(answer => pc.setLocalDescription(answer))
+            .then(() => {
+                sendMessage({
+                    type: 'webrtc-answer',
+                    target: peerId,
+                    payload: pc.localDescription
+                });
+            })
+            .catch(e => console.error(`Error handling offer from ${peerId}:`, e));
+    }
+
+    function handleAnswer(message) {
+        const peerId = message.sender;
+        const pc = peerConnections[peerId];
+        if (pc) {
+            pc.setRemoteDescription(new RTCSessionDescription(message.payload))
+                .catch(e => console.error(`Error setting remote description for ${peerId}:`, e));
         }
-        // Remove this listener after first click
-        document.removeEventListener('click', enableAudio);
-    }, { once: true });
+    }
+
+    function handleIceCandidate(message) {
+        const peerId = message.sender;
+        const pc = peerConnections[peerId];
+        if (pc) {
+            pc.addIceCandidate(new RTCIceCandidate(message.payload))
+                .catch(e => console.error(`Error adding ICE candidate from ${peerId}:`, e));
+        }
+    }
+
+    // --- UI Update Functions ---
+    function addVideoStream(stream, peerId, name, isLocal = false) {
+        let videoWrapper = document.getElementById(`video-wrapper-${peerId}`);
+        if (videoWrapper) {
+            videoWrapper.querySelector('video').srcObject = stream; // Update stream
+            return;
+        }
+
+        videoWrapper = document.createElement('div');
+        videoWrapper.id = `video-wrapper-${peerId}`;
+        videoWrapper.className = 'video-wrapper';
+
+        const video = document.createElement('video');
+        video.srcObject = stream;
+        video.autoplay = true;
+        video.playsInline = true;
+        if (isLocal) {
+            video.muted = true; // Mute own video to prevent feedback
+        }
+
+        const nameTag = document.createElement('div');
+        nameTag.className = 'user-name';
+        nameTag.textContent = name;
+
+        videoWrapper.appendChild(video);
+        videoWrapper.appendChild(nameTag);
+        videoGrid.appendChild(videoWrapper);
+    }
+
+    function removeVideoStream(peerId) {
+        const videoWrapper = document.getElementById(`video-wrapper-${peerId}`);
+        if (videoWrapper) {
+            videoWrapper.remove();
+        }
+    }
+
+    async function updateParticipantList() {
+        if (!roomId) return;
+        try {
+            const response = await fetch(`${API_BASE}/room/${roomId}/members`);
+            const members = await response.json();
+            participantsList.innerHTML = '';
+            
+            // Add self to the list visually
+            const self = { userId, userName, isMuted: !localStream.getAudioTracks()[0].enabled, isAdmin };
+            const allMembers = [self, ...members.filter(m => m.userId !== userId)];
+            
+            participantCount.textContent = allMembers.length;
+
+            allMembers.forEach(member => {
+                const li = document.createElement('li');
+                li.className = 'participant-item';
+                li.id = `participant-${member.userId}`;
+                li.dataset.username = member.userName;
+                
+                let adminTag = member.isAdmin ? ' (Admin)' : '';
+                let muteIcon = member.isMuted ? '🔇' : '🎤';
+                let adminControls = '';
+
+                if (isAdmin && member.userId !== userId) {
+                    const action = member.isMuted ? 'unmute' : 'mute';
+                    adminControls = `<span class="admin-controls"><button data-action="${action}" data-target-id="${member.userId}">${action.charAt(0).toUpperCase() + action.slice(1)}</button></span>`;
+                }
+
+                li.innerHTML = `
+                    <span>${muteIcon} ${member.userName}${adminTag}</span>
+                    ${adminControls}
+                `;
+                participantsList.appendChild(li);
+            });
+
+        } catch (error) {
+            console.error('Failed to update participant list:', error);
+        }
+    }
+    
+    function addChatMessage(data) {
+        const p = document.createElement('p');
+        if (data.system) {
+            p.innerHTML = `<i>${data.message}</i>`;
+        } else {
+             p.innerHTML = `<span class="sender">${data.userName}:</span> ${data.message}`;
+        }
+        chatMessages.appendChild(p);
+        chatMessages.scrollTop = chatMessages.scrollHeight; // Auto-scroll
+    }
+    
+    function handleChatSubmit(e) {
+        e.preventDefault();
+        const message = chatInput.value.trim();
+        if (message) {
+            sendMessage({
+                type: 'chat-message',
+                payload: { message }
+            });
+            chatInput.value = '';
+        }
+    }
+
+    function toggleAudioMute() {
+        const audioTrack = localStream.getAudioTracks()[0];
+        audioTrack.enabled = !audioTrack.enabled;
+        updateMuteButtons();
+        // Here you could broadcast your new mute status if desired
+    }
+
+    function toggleVideoMute() {
+        const videoTrack = localStream.getVideoTracks()[0];
+        videoTrack.enabled = !videoTrack.enabled;
+        updateMuteButtons();
+    }
+    
+    function updateMuteButtons() {
+        if (!localStream) return;
+        muteAudioBtn.textContent = localStream.getAudioTracks()[0].enabled ? 'Mute Audio' : 'Unmute Audio';
+        muteVideoBtn.textContent = localStream.getVideoTracks()[0].enabled ? 'Mute Video' : 'Unmute Video';
+    }
+    
+    async function handleAdminAction(e) {
+        if (e.target.tagName !== 'BUTTON') return;
+        
+        const action = e.target.dataset.action;
+        const targetUserId = e.target.dataset.targetId;
+
+        if (!action || !targetUserId) return;
+        
+        try {
+            const response = await fetch(`${API_BASE}/room/${roomId}/${action}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    adminUserId: userId,
+                    targetUserId: targetUserId
+                })
+            });
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(err.error || 'Admin action failed');
+            }
+            // The backend broadcasts the change, so our `user-muted/unmuted` handler will trigger a UI update.
+        } catch(error) {
+            console.error(`Error performing admin action '${action}':`, error);
+            alert(`Failed to ${action} user.`);
+        }
+    }
+
+    // --- Event Listeners ---
+    createRoomBtn.addEventListener('click', handleCreateRoom);
+    publicRoomsList.addEventListener('click', handleJoinRoomClick);
+    leaveBtn.addEventListener('click', leaveRoom);
+    chatForm.addEventListener('submit', handleChatSubmit);
+    muteAudioBtn.addEventListener('click', toggleAudioMute);
+    muteVideoBtn.addEventListener('click', toggleVideoMute);
+    participantsList.addEventListener('click', handleAdminAction);
+
+
+    // --- Initial Load ---
+    loadPublicRooms();
 });
