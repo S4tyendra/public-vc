@@ -4,21 +4,52 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Local LAN Voice Chat</title>
+    <title>WebRTC Voice Rooms</title>
     <style>
-        body { font-family: sans-serif; background: #2c2c2c; color: #f0f0f0; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-        #audio-container { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
-        audio { border: 1px solid #555; border-radius: 5px; }
-        h1 { color: #4CAF50; }
-        p { font-size: 1.2em; }
+        body { font-family: sans-serif; background: #2c2c2c; color: #f0f0f0; margin: 0; padding: 20px; }
+        .view { display: none; }
+        .view.active { display: block; }
+        h1, h2 { color: #4CAF50; }
+        button, input { padding: 10px; margin: 5px; border-radius: 5px; border: 1px solid #555; background: #444; color: #f0f0f0; }
+        button:hover { background: #555; }
+        #room-list { list-style-type: none; padding: 0; }
+        #room-list li { background: #3c3c3c; margin: 5px 0; padding: 10px; display: flex; justify-content: space-between; align-items: center; }
+        #audio-container { display: flex; flex-wrap: wrap; gap: 15px; margin-top: 20px; }
+        .audio-card { background: #3a3a3a; padding: 10px; border-radius: 8px; border: 1px solid #555; text-align: center; }
+        .audio-card p { margin: 0 0 5px 0; }
     </style>
 </head>
 <body>
-    <h1>Local LAN Voice Chat</h1>
-    <p id="status">Connecting to signaling server...</p>
-    <div id="audio-container">
-        <!-- Remote audio streams will be added here -->
+    <h1>WebRTC Voice Rooms</h1>
+
+    <!-- Login View -->
+    <div id="login-view" class="view active">
+        <h2>Enter Your Name</h2>
+        <input type="text" id="name-input" placeholder="Your Name">
+        <button id="login-button">Enter</button>
     </div>
+
+    <!-- Lobby View -->
+    <div id="lobby-view" class="view">
+        <h2 id="welcome-message"></h2>
+        <h3>Public Rooms</h3>
+        <ul id="room-list"></ul>
+        <button id="refresh-rooms-button">Refresh List</button>
+        <hr>
+        <h3>Create a New Room</h3>
+        <input type="text" id="room-name-input" placeholder="Room Name">
+        <label><input type="checkbox" id="is-public-checkbox" checked> Public</label>
+        <button id="create-room-button">Create Room</button>
+    </div>
+
+    <!-- Room View -->
+    <div id="room-view" class="view">
+        <h2 id="room-title"></h2>
+        <p id="status">Connecting...</p>
+        <button id="leave-room-button">Leave Room</button>
+        <div id="audio-container"></div>
+    </div>
+
     <script src="/script.js"></script>
 </body>
 </html>
