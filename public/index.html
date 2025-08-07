@@ -1,0 +1,24 @@
+<!-- public/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local LAN Voice Chat</title>
+    <style>
+        body { font-family: sans-serif; background: #2c2c2c; color: #f0f0f0; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+        #audio-container { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+        audio { border: 1px solid #555; border-radius: 5px; }
+        h1 { color: #4CAF50; }
+        p { font-size: 1.2em; }
+    </style>
+</head>
+<body>
+    <h1>Local LAN Voice Chat</h1>
+    <p id="status">Connecting to signaling server...</p>
+    <div id="audio-container">
+        <!-- Remote audio streams will be added here -->
+    </div>
+    <script src="/script.js"></script>
+</body>
+</html>
